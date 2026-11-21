@@ -3,6 +3,8 @@ import { logEvent } from '@/lib/log';
 
 export const dynamic = 'force-dynamic';
 
+// Logs the download, then sends the browser to the Blob CDN (?download=1 makes it a file download).
+// The function finishes in milliseconds instead of streaming the whole file.
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const n = Number(id);
@@ -14,20 +16,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const p = rows[0];
   if (!p) return new Response('Not found', { status: 404 });
 
-  const upstream = await fetch(p.orig_url);
-  if (!upstream.ok || !upstream.body) return new Response('Unavailable', { status: 502 });
-
   await logEvent(req, 'download', [{ id: n, name: p.name }]);
 
-  const headers = new Headers();
-  headers.set('Content-Type', upstream.headers.get('content-type') || 'application/octet-stream');
-  const len = upstream.headers.get('content-length');
-  if (len) headers.set('Content-Length', len);
-  const safe = p.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-  headers.set(
-    'Content-Disposition',
-    'attachment; filename="' + safe + '"; filename*=UTF-8' + "''" + encodeURIComponent(p.name)
-  );
-  headers.set('Cache-Control', 'no-store');
-  return new Response(upstream.body, { headers });
+  const target = new URL(p.orig_url);
+  target.searchParams.set('download', '1');
+  return new Response(null, {
+    status: 302,
+    headers: { Location: target.toString(), 'Cache-Control': 'no-store' },
+  });
 }

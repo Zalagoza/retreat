@@ -2,6 +2,9 @@ import type { Metadata, Viewport } from 'next';
 import { Montserrat } from 'next/font/google';
 import './globals.css';
 import VisitBeacon from '@/components/VisitBeacon';
+import Nav from '@/components/Nav';
+import Footer from '@/components/Footer';
+import { SITE_TITLE, SHARE_TITLE, SHARE_DESCRIPTION } from '@/lib/config';
 
 const montserrat = Montserrat({
   subsets: ['latin'],
@@ -10,9 +13,35 @@ const montserrat = Montserrat({
   variable: '--font-montserrat',
 });
 
+// WhatsApp needs an absolute image URL, so this must be your real https address
+function siteUrl(): URL {
+  try {
+    if (process.env.NEXT_PUBLIC_SITE_URL) return new URL(process.env.NEXT_PUBLIC_SITE_URL);
+  } catch { /* fall through */ }
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return new URL('https://' + process.env.VERCEL_PROJECT_PRODUCTION_URL);
+  }
+  return new URL('http://localhost:3000');
+}
+
 export const metadata: Metadata = {
-  title: 'Kia Memoirs',
-  description: 'Photo library',
+  metadataBase: siteUrl(),
+  title: { default: SITE_TITLE, template: '%s | KIA Memoirs' },
+  description: SHARE_DESCRIPTION,
+  openGraph: {
+    title: SHARE_TITLE,
+    description: SHARE_DESCRIPTION,
+    siteName: 'KIA Memoirs',
+    type: 'website',
+    url: '/',
+    images: [{ url: '/og', width: 1200, height: 630, alt: SHARE_TITLE }],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: SHARE_TITLE,
+    description: SHARE_DESCRIPTION,
+    images: ['/og'],
+  },
 };
 
 export const viewport: Viewport = {
@@ -25,14 +54,13 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className={montserrat.variable + ' font-montserrat min-h-dvh antialiased'}>
-        <header className="border-b-4 border-rast-gold bg-rast-charcoal pt-safe px-safe">
-          <div className="mx-auto flex max-w-[1400px] items-center justify-between px-3 py-3">
-            <a href="/" className="text-lg font-bold text-rast-gold">Kia Memoirs</a>
-            <a href="/admin" className="p-2 text-sm text-rast-cream/70 hover:text-rast-gold">Admin</a>
-          </div>
-        </header>
-        <main className="mx-auto max-w-[1400px] px-3 px-safe py-3">{children}</main>
+      <body className={montserrat.variable + ' font-montserrat flex min-h-dvh flex-col antialiased'}>
+        <Nav />
+        <div aria-hidden className="pt-safe"><div className="h-[60px]" /></div>
+        <main className="mx-auto w-full max-w-[1400px] flex-1 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] py-3">
+          {children}
+        </main>
+        <Footer />
         <VisitBeacon />
       </body>
     </html>

@@ -161,7 +161,7 @@ export default function Gallery({ initial, total }: { initial: Photo[]; total: n
       {loading && <p className="py-2 text-center text-sm text-neutral-400">Loading more...</p>}
 
       {selecting && sel.size > 0 && (
-        <div className="fixed bottom-0 left-0 z-40 flex w-full items-center gap-3 border-t border-neutral-700 bg-neutral-900 px-4 pt-3 pb-safe">
+        <div className="fixed bottom-0 left-0 z-40 flex w-full items-center gap-3 border-t border-neutral-700 bg-neutral-900 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <span className="text-sm">{sel.size} selected</span>
           <a
             href={'/api/zip?ids=' + Array.from(sel).join(',')}
@@ -175,7 +175,7 @@ export default function Gallery({ initial, total }: { initial: Photo[]; total: n
 
       {cur && open !== null && (
         <div className="fixed left-0 top-0 z-50 flex h-dvh w-full flex-col overscroll-contain bg-black">
-          <div className="flex items-center gap-2 bg-neutral-900 pt-safe px-safe pl-3 pr-1 text-sm">
+          <div className="flex items-center gap-2 bg-neutral-900 pt-safe pl-3 pr-1 text-sm">
             <span className="min-w-0 flex-1 truncate">{cur.name}</span>
             <span className="text-neutral-400">{open + 1}/{total}</span>
             <button onClick={() => setPlaying((v) => !v)} className="p-3" aria-label="Slideshow">
@@ -220,7 +220,7 @@ export default function Gallery({ initial, total }: { initial: Photo[]; total: n
             )}
           </div>
 
-          <div className="flex gap-1 overflow-x-auto overscroll-x-contain bg-neutral-900 p-2 pb-safe">
+          <div className="flex gap-1 overflow-x-auto overscroll-x-contain bg-neutral-900 p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
             {strip.map((p, k) => {
               const i = from + k;
               return (

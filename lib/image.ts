@@ -1,4 +1,4 @@
-// Browser-only helpers: small square thumbnail + phone-friendly 1280px copy before upload
+// Browser-only helpers: small square thumbnail + sharp 1600px viewer copy before upload
 type Src = ImageBitmap | HTMLImageElement;
 
 async function load(file: File): Promise<{ src: Src; w: number; h: number; done: () => void }> {
@@ -35,23 +35,38 @@ function render(src: Src, w: number, h: number, size: number, square: boolean, q
     dw = Math.round(w * k);
     dh = Math.round(h * k);
   }
-  const c = document.createElement('canvas');
-  c.width = dw;
-  c.height = dh;
-  const ctx = c.getContext('2d');
-  if (!ctx) return Promise.reject(new Error('Canvas not supported'));
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(src, sx, sy, sw, sh, 0, 0, dw, dh);
+  const mk = (cw: number, ch: number) => {
+    const c = document.createElement('canvas');
+    c.width = cw;
+    c.height = ch;
+    const x = c.getContext('2d');
+    if (x) x.imageSmoothingQuality = 'high';
+    return { c, x };
+  };
+  // Step down by halves: much sharper than one big jump from a 12 MP photo
+  let cur: CanvasImageSource = src;
+  let cx = sx, cy = sy, cw = sw, ch = sh;
+  while (cw / 2 >= dw && ch / 2 >= dh) {
+    const nw = Math.round(cw / 2), nh = Math.round(ch / 2);
+    const t = mk(nw, nh);
+    if (!t.x) return Promise.reject(new Error('Canvas not supported'));
+    t.x.drawImage(cur, cx, cy, cw, ch, 0, 0, nw, nh);
+    cur = t.c;
+    cx = 0; cy = 0; cw = nw; ch = nh;
+  }
+  const out = mk(dw, dh);
+  if (!out.x) return Promise.reject(new Error('Canvas not supported'));
+  out.x.drawImage(cur, cx, cy, cw, ch, 0, 0, dw, dh);
   return new Promise((res, rej) =>
-    c.toBlob((b) => (b ? res(b) : rej(new Error('Could not encode image'))), 'image/jpeg', q)
+    out.c.toBlob((b) => (b ? res(b) : rej(new Error('Could not encode image'))), 'image/jpeg', q)
   );
 }
 
 export async function makeVariants(file: File) {
   const { src, w, h, done } = await load(file);
   try {
-    const thumb = await render(src, w, h, 320, true, 0.8);
-    const view = await render(src, w, h, 1280, false, 0.78);
+    const thumb = await render(src, w, h, 320, true, 0.85);
+    const view = await render(src, w, h, 1600, false, 0.85);
     return { thumb, view };
   } finally {
     done();

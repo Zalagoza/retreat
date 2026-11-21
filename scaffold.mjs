@@ -24,6 +24,7 @@ files['package.json'] = `{
     "jose": "^5.9.6",
     "lucide-react": "^0.468.0",
     "next": "^15.1.0",
+    "sharp": "^0.33.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
@@ -300,7 +301,7 @@ export async function logEvent(req: Request, type: 'download' | 'visit', photos?
   }
 }`;
 
-files['lib/image.ts'] = `// Browser-only helpers: small square thumbnail + phone-friendly 1280px copy before upload
+files['lib/image.ts'] = `// Browser-only helpers: small square thumbnail + sharp 1600px viewer copy before upload
 type Src = ImageBitmap | HTMLImageElement;
 
 async function load(file: File): Promise<{ src: Src; w: number; h: number; done: () => void }> {
@@ -337,23 +338,38 @@ function render(src: Src, w: number, h: number, size: number, square: boolean, q
     dw = Math.round(w * k);
     dh = Math.round(h * k);
   }
-  const c = document.createElement('canvas');
-  c.width = dw;
-  c.height = dh;
-  const ctx = c.getContext('2d');
-  if (!ctx) return Promise.reject(new Error('Canvas not supported'));
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(src, sx, sy, sw, sh, 0, 0, dw, dh);
+  const mk = (cw: number, ch: number) => {
+    const c = document.createElement('canvas');
+    c.width = cw;
+    c.height = ch;
+    const x = c.getContext('2d');
+    if (x) x.imageSmoothingQuality = 'high';
+    return { c, x };
+  };
+  // Step down by halves: much sharper than one big jump from a 12 MP photo
+  let cur: CanvasImageSource = src;
+  let cx = sx, cy = sy, cw = sw, ch = sh;
+  while (cw / 2 >= dw && ch / 2 >= dh) {
+    const nw = Math.round(cw / 2), nh = Math.round(ch / 2);
+    const t = mk(nw, nh);
+    if (!t.x) return Promise.reject(new Error('Canvas not supported'));
+    t.x.drawImage(cur, cx, cy, cw, ch, 0, 0, nw, nh);
+    cur = t.c;
+    cx = 0; cy = 0; cw = nw; ch = nh;
+  }
+  const out = mk(dw, dh);
+  if (!out.x) return Promise.reject(new Error('Canvas not supported'));
+  out.x.drawImage(cur, cx, cy, cw, ch, 0, 0, dw, dh);
   return new Promise((res, rej) =>
-    c.toBlob((b) => (b ? res(b) : rej(new Error('Could not encode image'))), 'image/jpeg', q)
+    out.c.toBlob((b) => (b ? res(b) : rej(new Error('Could not encode image'))), 'image/jpeg', q)
   );
 }
 
 export async function makeVariants(file: File) {
   const { src, w, h, done } = await load(file);
   try {
-    const thumb = await render(src, w, h, 320, true, 0.8);
-    const view = await render(src, w, h, 1280, false, 0.78);
+    const thumb = await render(src, w, h, 320, true, 0.85);
+    const view = await render(src, w, h, 1600, false, 0.85);
     return { thumb, view };
   } finally {
     done();
@@ -401,6 +417,9 @@ files['app/layout.tsx'] = `import type { Metadata, Viewport } from 'next';
 import { Montserrat } from 'next/font/google';
 import './globals.css';
 import VisitBeacon from '@/components/VisitBeacon';
+import Nav from '@/components/Nav';
+import Footer from '@/components/Footer';
+import { SITE_TITLE, SHARE_TITLE, SHARE_DESCRIPTION } from '@/lib/config';
 
 const montserrat = Montserrat({
   subsets: ['latin'],
@@ -409,9 +428,35 @@ const montserrat = Montserrat({
   variable: '--font-montserrat',
 });
 
+// WhatsApp needs an absolute image URL, so this must be your real https address
+function siteUrl(): URL {
+  try {
+    if (process.env.NEXT_PUBLIC_SITE_URL) return new URL(process.env.NEXT_PUBLIC_SITE_URL);
+  } catch { /* fall through */ }
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return new URL('https://' + process.env.VERCEL_PROJECT_PRODUCTION_URL);
+  }
+  return new URL('http://localhost:3000');
+}
+
 export const metadata: Metadata = {
-  title: 'Kia Memoirs',
-  description: 'Photo library',
+  metadataBase: siteUrl(),
+  title: { default: SITE_TITLE, template: '%s | KIA Memoirs' },
+  description: SHARE_DESCRIPTION,
+  openGraph: {
+    title: SHARE_TITLE,
+    description: SHARE_DESCRIPTION,
+    siteName: 'KIA Memoirs',
+    type: 'website',
+    url: '/',
+    images: [{ url: '/og', width: 1200, height: 630, alt: SHARE_TITLE }],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: SHARE_TITLE,
+    description: SHARE_DESCRIPTION,
+    images: ['/og'],
+  },
 };
 
 export const viewport: Viewport = {
@@ -424,14 +469,13 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className={montserrat.variable + ' font-montserrat min-h-dvh antialiased'}>
-        <header className="border-b-4 border-rast-gold bg-rast-charcoal pt-safe px-safe">
-          <div className="mx-auto flex max-w-[1400px] items-center justify-between px-3 py-3">
-            <a href="/" className="text-lg font-bold text-rast-gold">Kia Memoirs</a>
-            <a href="/admin" className="p-2 text-sm text-rast-cream/70 hover:text-rast-gold">Admin</a>
-          </div>
-        </header>
-        <main className="mx-auto max-w-[1400px] px-3 px-safe py-3">{children}</main>
+      <body className={montserrat.variable + ' font-montserrat flex min-h-dvh flex-col antialiased'}>
+        <Nav />
+        <div aria-hidden className="pt-safe"><div className="h-[60px]" /></div>
+        <main className="mx-auto w-full max-w-[1400px] flex-1 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] py-3">
+          {children}
+        </main>
+        <Footer />
         <VisitBeacon />
       </body>
     </html>
@@ -633,7 +677,7 @@ export default function Gallery({ initial, total }: { initial: Photo[]; total: n
       {loading && <p className="py-2 text-center text-sm text-neutral-400">Loading more...</p>}
 
       {selecting && sel.size > 0 && (
-        <div className="fixed bottom-0 left-0 z-40 flex w-full items-center gap-3 border-t border-neutral-700 bg-neutral-900 px-4 pt-3 pb-safe">
+        <div className="fixed bottom-0 left-0 z-40 flex w-full items-center gap-3 border-t border-neutral-700 bg-neutral-900 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <span className="text-sm">{sel.size} selected</span>
           <a
             href={'/api/zip?ids=' + Array.from(sel).join(',')}
@@ -647,7 +691,7 @@ export default function Gallery({ initial, total }: { initial: Photo[]; total: n
 
       {cur && open !== null && (
         <div className="fixed left-0 top-0 z-50 flex h-dvh w-full flex-col overscroll-contain bg-black">
-          <div className="flex items-center gap-2 bg-neutral-900 pt-safe px-safe pl-3 pr-1 text-sm">
+          <div className="flex items-center gap-2 bg-neutral-900 pt-safe pl-3 pr-1 text-sm">
             <span className="min-w-0 flex-1 truncate">{cur.name}</span>
             <span className="text-neutral-400">{open + 1}/{total}</span>
             <button onClick={() => setPlaying((v) => !v)} className="p-3" aria-label="Slideshow">
@@ -692,7 +736,7 @@ export default function Gallery({ initial, total }: { initial: Photo[]; total: n
             )}
           </div>
 
-          <div className="flex gap-1 overflow-x-auto overscroll-x-contain bg-neutral-900 p-2 pb-safe">
+          <div className="flex gap-1 overflow-x-auto overscroll-x-contain bg-neutral-900 p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
             {strip.map((p, k) => {
               const i = from + k;
               return (
@@ -827,19 +871,28 @@ export default function DeleteButton({ id }: { id: number }) {
 files['app/page.tsx'] = `import { preconnect } from 'react-dom';
 import { query, type Photo } from '@/lib/db';
 import Gallery from '@/components/Gallery';
+import Carousel from '@/components/Carousel';
+import { SITE_TITLE } from '@/lib/config';
 
 // Cached for 60s (and refreshed instantly after upload/delete) so phones get fast HTML
 export const revalidate = 60;
 
 export default async function Home() {
-  const photos = await query<Photo>(
-    'SELECT id, name, thumb_url, view_url FROM kia_photos ORDER BY created_at DESC, id DESC LIMIT 48'
-  );
-  const c = await query<{ n: string }>('SELECT count(*) AS n FROM kia_photos');
+  const [photos, count, slides] = await Promise.all([
+    query<Photo>('SELECT id, name, thumb_url, view_url FROM kia_photos ORDER BY created_at DESC, id DESC LIMIT 48'),
+    query<{ n: string }>('SELECT count(*) AS n FROM kia_photos'),
+    query<{ id: number; name: string; view_url: string }>('SELECT id, name, view_url FROM kia_photos ORDER BY random() LIMIT 4'),
+  ]);
   if (photos[0]) {
     try { preconnect(new URL(photos[0].thumb_url).origin); } catch { /* ignore */ }
   }
-  return <Gallery initial={photos} total={Number(c[0].n)} />;
+  return (
+    <>
+      <Carousel slides={slides} />
+      <h1 className="mb-3 text-lg font-bold text-rast-gold sm:text-2xl">{SITE_TITLE}</h1>
+      <Gallery initial={photos} total={Number(count[0].n)} />
+    </>
+  );
 }`;
 
 files['app/admin/login/page.tsx'] = `'use client';
@@ -1113,6 +1166,8 @@ import { logEvent } from '@/lib/log';
 
 export const dynamic = 'force-dynamic';
 
+// Logs the download, then sends the browser to the Blob CDN (?download=1 makes it a file download).
+// The function finishes in milliseconds instead of streaming the whole file.
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const n = Number(id);
@@ -1124,22 +1179,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const p = rows[0];
   if (!p) return new Response('Not found', { status: 404 });
 
-  const upstream = await fetch(p.orig_url);
-  if (!upstream.ok || !upstream.body) return new Response('Unavailable', { status: 502 });
-
   await logEvent(req, 'download', [{ id: n, name: p.name }]);
 
-  const headers = new Headers();
-  headers.set('Content-Type', upstream.headers.get('content-type') || 'application/octet-stream');
-  const len = upstream.headers.get('content-length');
-  if (len) headers.set('Content-Length', len);
-  const safe = p.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-  headers.set(
-    'Content-Disposition',
-    'attachment; filename="' + safe + '"; filename*=UTF-8' + "''" + encodeURIComponent(p.name)
-  );
-  headers.set('Cache-Control', 'no-store');
-  return new Response(upstream.body, { headers });
+  const target = new URL(p.orig_url);
+  target.searchParams.set('download', '1');
+  return new Response(null, {
+    status: 302,
+    headers: { Location: target.toString(), 'Cache-Control': 'no-store' },
+  });
 }`;
 
 files['app/api/visit/route.ts'] = `import { NextResponse } from 'next/server';
@@ -1163,7 +1210,17 @@ Location (country/city) comes from Vercel's edge headers, so it only fills in on
 `;
 
 files['lib/config.ts'] = `export const MAX_UPLOAD_MB = 12;
-export const MAX_ZIP_PHOTOS = 100;`;
+export const MAX_ZIP_PHOTOS = 100;
+
+export const SITE_TITLE = 'KIA IMMIGRATION MENS WELFARE MEMOIRS';
+export const SHARE_TITLE = 'Kia Immigration Mens Welfare Retreat | Memoirs';
+export const SHARE_DESCRIPTION = 'Photo memories from the Kia Immigration Mens Welfare Retreat.';
+
+export const WHATSAPP_NUMBER = '265996103277'; // 0996103277 with Malawi code
+export const WA_LINK = 'https://wa.me/' + WHATSAPP_NUMBER;
+export const WA_HELP_LINK =
+  WA_LINK + '?text=' + encodeURIComponent('Hello, I need help with the Kia Memoirs photo site.');
+export const DEVELOPER_URL = 'https://www.wathudigitalcreations.com';`;
 
 files['app/api/zip/route.ts'] = `import archiver from 'archiver';
 import { Readable } from 'stream';
@@ -1214,6 +1271,274 @@ export async function GET(req: Request) {
       'Content-Type': 'application/zip',
       'Content-Disposition': 'attachment; filename="kia-photos.zip"',
       'Cache-Control': 'no-store',
+    },
+  });
+}`;
+
+files['components/Nav.tsx'] = `'use client';
+import { useState } from 'react';
+import { Menu, X } from 'lucide-react';
+import { WA_LINK } from '@/lib/config';
+
+const links = [
+  { href: '/about', label: 'About Us', external: false },
+  { href: WA_LINK, label: 'Contact Me', external: true },
+  { href: '/admin', label: 'Admin log in', external: false },
+  { href: '/help', label: 'Help', external: false },
+];
+
+export default function Nav() {
+  const [open, setOpen] = useState(false);
+  const item = 'block px-3 py-3 text-sm hover:text-rast-gold sm:py-2';
+  return (
+    <nav className="fixed left-0 top-0 z-40 w-full border-b-4 border-rast-gold bg-rast-charcoal pt-safe">
+      <div className="mx-auto flex h-14 max-w-[1400px] items-center justify-between pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))]">
+        <a href="/" className="text-lg font-bold text-rast-gold">KIA MEMOIRS</a>
+        <ul className="hidden items-center gap-2 sm:flex">
+          {links.map((l) => (
+            <li key={l.label}>
+              <a href={l.href} className={item} {...(l.external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>
+                {l.label}
+              </a>
+            </li>
+          ))}
+        </ul>
+        <button onClick={() => setOpen((v) => !v)} className="p-2 sm:hidden" aria-label="Menu" aria-expanded={open}>
+          {open ? <X size={24} /> : <Menu size={24} />}
+        </button>
+      </div>
+      {open && (
+        <ul className="border-t border-neutral-700 bg-rast-charcoal pb-2 sm:hidden">
+          {links.map((l) => (
+            <li key={l.label}>
+              <a
+                href={l.href}
+                onClick={() => setOpen(false)}
+                className={item + ' pl-4'}
+                {...(l.external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+              >
+                {l.label}
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </nav>
+  );
+}`;
+
+files['components/Footer.tsx'] = `import { DEVELOPER_URL, WA_LINK } from '@/lib/config';
+
+export default function Footer() {
+  return (
+    <footer className="mt-8 border-t-4 border-rast-gold bg-rast-charcoal">
+      <div className="mx-auto max-w-[1400px] space-y-2 px-3 py-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] text-center text-sm text-neutral-400">
+        <p>&copy; {new Date().getFullYear()} KIA Immigration Men&apos;s Welfare Retreat. All rights reserved.</p>
+        <p>
+          Roots of{' '}
+          <a href={DEVELOPER_URL} target="_blank" rel="noopener noreferrer" className="text-rast-gold underline">
+            Wathu Digital Creations
+          </a>
+        </p>
+        <p className="flex justify-center gap-5">
+          <a href="/about" className="py-1 hover:text-rast-gold">About Us</a>
+          <a href="/help" className="py-1 hover:text-rast-gold">Help</a>
+          <a href={WA_LINK} target="_blank" rel="noopener noreferrer" className="py-1 hover:text-rast-gold">Contact</a>
+        </p>
+      </div>
+    </footer>
+  );
+}`;
+
+files['components/Carousel.tsx'] = `'use client';
+import { useEffect, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
+
+type Slide = { id: number; name: string; view_url: string };
+
+export default function Carousel({ slides }: { slides: Slide[] }) {
+  const n = slides.length;
+  const [i, setI] = useState(0);
+  const [paused, setPaused] = useState(false);
+  // only fetch a slide when it is current or next, to save mobile data
+  const [seen, setSeen] = useState<Set<number>>(new Set([0, 1]));
+  const tx = useRef(0);
+
+  useEffect(() => {
+    setSeen((s) => new Set(s).add(i).add((i + 1) % Math.max(n, 1)));
+  }, [i, n]);
+
+  useEffect(() => {
+    if (n < 2 || paused) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const t = setInterval(() => setI((v) => (v + 1) % n), 4500);
+    return () => clearInterval(t);
+  }, [n, paused]);
+
+  if (!n) return null;
+  const go = (d: number) => setI((v) => (v + d + n) % n);
+
+  return (
+    <section
+      aria-roledescription="carousel"
+      aria-label="Featured photos"
+      className="relative mb-4 overflow-hidden rounded-lg bg-neutral-800"
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+      onTouchStart={(e) => { tx.current = e.touches[0].clientX; setPaused(true); }}
+      onTouchEnd={(e) => {
+        const dx = e.changedTouches[0].clientX - tx.current;
+        if (Math.abs(dx) > 50) go(dx < 0 ? 1 : -1);
+        setPaused(false);
+      }}
+    >
+      <div className="relative aspect-[4/3] w-full touch-pan-y sm:aspect-[21/9]">
+        {slides.map((s, k) => (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            key={s.id}
+            src={seen.has(k) ? s.view_url : undefined}
+            alt={s.name}
+            aria-hidden={k !== i}
+            loading={k === 0 ? 'eager' : 'lazy'}
+            fetchPriority={k === 0 ? 'high' : 'auto'}
+            decoding="async"
+            className={'absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ' + (k === i ? 'opacity-100' : 'opacity-0')}
+          />
+        ))}
+      </div>
+      {n > 1 && (
+        <>
+          <button onClick={() => go(-1)} aria-label="Previous photo" className="absolute left-2 top-1/2 hidden -translate-y-1/2 rounded-full bg-black/50 p-2 hover:bg-black/80 sm:block">
+            <ChevronLeft />
+          </button>
+          <button onClick={() => go(1)} aria-label="Next photo" className="absolute right-2 top-1/2 hidden -translate-y-1/2 rounded-full bg-black/50 p-2 hover:bg-black/80 sm:block">
+            <ChevronRight />
+          </button>
+          <div className="absolute bottom-2 left-0 flex w-full justify-center">
+            {slides.map((s, k) => (
+              <button key={s.id} onClick={() => setI(k)} aria-label={'Show photo ' + (k + 1)} className="p-2">
+                <span className={'block h-2 w-2 rounded-full ' + (k === i ? 'bg-rast-gold' : 'bg-white/60')} />
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}`;
+
+files['app/about/page.tsx'] = `import { DEVELOPER_URL } from '@/lib/config';
+
+export const metadata = { title: 'About Us' };
+
+export default function About() {
+  return (
+    <div className="mx-auto max-w-2xl space-y-4 py-4">
+      <h1 className="text-2xl font-bold text-rast-gold">About Us</h1>
+      <p className="leading-relaxed">
+        This is Mungiki Chanel.{' '}
+        <a href={DEVELOPER_URL} target="_blank" rel="noopener noreferrer" className="text-rast-gold underline">
+          Roots of Wathu Digital Creations
+        </a>
+      </p>
+    </div>
+  );
+}`;
+
+files['app/help/page.tsx'] = `import { WA_HELP_LINK } from '@/lib/config';
+
+export const metadata = { title: 'Help' };
+
+export default function Help() {
+  return (
+    <div className="mx-auto max-w-2xl space-y-6 py-4 leading-relaxed">
+      <h1 className="text-2xl font-bold text-rast-gold">Help</h1>
+
+      <section className="space-y-2">
+        <h2 className="text-lg font-bold">Download one photo</h2>
+        <p>Tap the download icon in the corner of a photo, or open the photo and tap the download icon at the top. You get the full-size original.</p>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-lg font-bold">Download many photos at once (batch download)</h2>
+        <ol className="list-decimal space-y-1 pl-5">
+          <li>Tap <strong>Select</strong> above the photos.</li>
+          <li>Tap each photo you want. A gold tick shows it is chosen. <strong>Select all</strong> picks the photos loaded so far.</li>
+          <li>Tap <strong>Download ZIP</strong> at the bottom of the screen.</li>
+          <li>Your phone saves one ZIP file containing all the chosen photos in full size. Open it from your Downloads folder or Files app.</li>
+        </ol>
+        <p>You can zip up to 100 photos at a time. For more, download in several rounds. Large zips can take a moment to start, so keep the page open and wait.</p>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-lg font-bold">Not working?</h2>
+        <p>Try again with fewer photos, check that you have storage space and a steady connection. If it still fails, contact the admin on WhatsApp.</p>
+        <a href={WA_HELP_LINK} target="_blank" rel="noopener noreferrer" className="inline-block rounded bg-rast-gold px-5 py-3 font-bold text-rast-night">
+          Contact admin on WhatsApp
+        </a>
+      </section>
+    </div>
+  );
+}`;
+
+files['app/og/route.ts'] = `import sharp from 'sharp';
+import { query } from '@/lib/db';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+const W = 1200;
+const H = 630;
+const COLS = 3;
+const ROWS = 2;
+
+// Link-preview image (WhatsApp etc.): a collage of random photos, small JPEG so it always shows
+export async function GET() {
+  let urls: string[] = [];
+  try {
+    const rows = await query<{ thumb_url: string }>(
+      'SELECT thumb_url FROM kia_photos ORDER BY random() LIMIT ' + COLS * ROWS
+    );
+    urls = rows.map((r) => r.thumb_url);
+  } catch { /* fall back to plain banner */ }
+
+  const cw = W / COLS;
+  const ch = H / ROWS;
+  const settled = await Promise.allSettled(
+    urls.map(async (u) => {
+      const res = await fetch(u, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) throw new Error('bad image');
+      return sharp(Buffer.from(await res.arrayBuffer()))
+        .resize(cw, ch, { fit: 'cover' })
+        .jpeg({ quality: 80 })
+        .toBuffer();
+    })
+  );
+  const tiles = settled.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
+
+  const overlays: sharp.OverlayOptions[] = [];
+  if (tiles.length) {
+    for (let k = 0; k < COLS * ROWS; k++) {
+      overlays.push({ input: tiles[k % tiles.length], left: (k % COLS) * cw, top: Math.floor(k / COLS) * ch });
+    }
+  }
+  const stripe =
+    '<svg width="' + W + '" height="14" xmlns="http://www.w3.org/2000/svg">' +
+    '<rect width="400" height="14" fill="#C8102E"/>' +
+    '<rect x="400" width="400" height="14" fill="#FFCE00"/>' +
+    '<rect x="800" width="400" height="14" fill="#007A3D"/></svg>';
+  overlays.push({ input: Buffer.from(stripe), left: 0, top: H - 14 });
+
+  const out = await sharp({ create: { width: W, height: H, channels: 3, background: '#1A1A1A' } })
+    .composite(overlays)
+    .jpeg({ quality: 72, mozjpeg: true })
+    .toBuffer();
+
+  return new Response(new Uint8Array(out), {
+    headers: {
+      'Content-Type': 'image/jpeg',
+      'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=86400',
     },
   });
 }`;
