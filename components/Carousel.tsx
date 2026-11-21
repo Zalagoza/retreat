@@ -40,7 +40,7 @@ export default function Carousel({ slides }: { slides: Slide[] }) {
         setPaused(false);
       }}
     >
-      <div className="relative aspect-[4/3] w-full touch-pan-y sm:aspect-[21/9]">
+      <div className="relative aspect-[16/9] max-h-[420px] w-full touch-pan-y sm:aspect-[3/1]">
         {slides.map((s, k) => (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -51,7 +51,7 @@ export default function Carousel({ slides }: { slides: Slide[] }) {
             loading={k === 0 ? 'eager' : 'lazy'}
             fetchPriority={k === 0 ? 'high' : 'auto'}
             decoding="async"
-            className={'absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ' + (k === i ? 'opacity-100' : 'opacity-0')}
+            className={'absolute inset-0 h-full w-full object-cover object-top transition-opacity duration-700 ' + (k === i ? 'opacity-100' : 'opacity-0')}
           />
         ))}
       </div>
